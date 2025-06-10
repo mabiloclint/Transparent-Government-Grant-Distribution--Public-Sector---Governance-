@@ -127,3 +127,4 @@
 (define-read-only (get-milestone-details (grant-id uint) (milestone-id uint))
     (ok (unwrap! (map-get? milestones { grant-id: grant-id, milestone-id: milestone-id }) ERR-GRANT-NOT-FOUND))
 )
+;;Thanks
