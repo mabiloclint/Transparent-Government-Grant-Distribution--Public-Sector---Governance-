@@ -3,6 +3,9 @@
 (define-constant ERR-GRANT-NOT-FOUND (err u102))
 (define-constant ERR-ALREADY-APPROVED (err u103))
 (define-constant ERR-INSUFFICIENT-FUNDS (err u104))
+(define-constant ERR-GRANT-EXPIRED (err u105))
+
+(define-constant DEFAULT-EXPIRY-BLOCKS u2016)
 
 (define-data-var government-address principal tx-sender)
 (define-data-var total-grants uint u0)
@@ -17,7 +20,8 @@
         status: (string-ascii 64),
         approved-at: uint,
         milestone-count: uint,
-        completed-milestones: uint
+        completed-milestones: uint,
+        expiry-block: uint
     }
 )
 
@@ -50,7 +54,8 @@
                 status: "PENDING",
                 approved-at: u0,
                 milestone-count: u0,
-                completed-milestones: u0
+                completed-milestones: u0,
+                expiry-block: u0
             }
         )
         (var-set total-grants grant-id)
@@ -66,7 +71,8 @@
             { grant-id: grant-id }
             (merge grant {
                 status: "APPROVED",
-                approved-at: burn-block-height
+                approved-at: burn-block-height,
+                expiry-block: (+ burn-block-height DEFAULT-EXPIRY-BLOCKS)
             })
         )
         (ok true)
@@ -126,5 +132,40 @@
 
 (define-read-only (get-milestone-details (grant-id uint) (milestone-id uint))
     (ok (unwrap! (map-get? milestones { grant-id: grant-id, milestone-id: milestone-id }) ERR-GRANT-NOT-FOUND))
+)
+
+(define-public (set-grant-expiry (grant-id uint) (expiry-blocks uint))
+    (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+        (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+        (asserts! (is-eq (get status grant) "APPROVED") ERR-GRANT-NOT-FOUND)
+        (map-set grants
+            { grant-id: grant-id }
+            (merge grant {
+                expiry-block: (+ burn-block-height expiry-blocks)
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (is-grant-expired (grant-id uint))
+    (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+        (let ((expiry-block (get expiry-block grant)))
+            (if (is-eq expiry-block u0)
+                (ok false)
+                (ok (>= burn-block-height expiry-block))
+            )
+        )
+    )
+)
+
+(define-read-only (get-grant-with-status (grant-id uint))
+    (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+        (let ((is-expired (unwrap-panic (is-grant-expired grant-id))))
+            (ok (merge grant {
+                status: (if is-expired "EXPIRED" (get status grant))
+            }))
+        )
+    )
 )
 ;;Thanks
