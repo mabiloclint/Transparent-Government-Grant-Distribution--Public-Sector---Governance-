@@ -4,12 +4,16 @@
 (define-constant ERR-ALREADY-APPROVED (err u103))
 (define-constant ERR-INSUFFICIENT-FUNDS (err u104))
 (define-constant ERR-GRANT-EXPIRED (err u105))
+(define-constant ERR-BUDGET-EXCEEDED (err u106))
+(define-constant ERR-INVALID-BUDGET (err u107))
 
 (define-constant DEFAULT-EXPIRY-BLOCKS u2016)
 
 (define-data-var government-address principal tx-sender)
 (define-data-var total-grants uint u0)
 (define-data-var total-funds uint u0)
+(define-data-var total-budget uint u0)
+(define-data-var allocated-budget uint u0)
 
 (define-map grants 
     { grant-id: uint } 
@@ -64,9 +68,17 @@
 )
 
 (define-public (approve-grant (grant-id uint))
-    (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+    (let (
+        (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
+        (grant-amount (get amount grant))
+        (current-allocated (var-get allocated-budget))
+        (current-budget (var-get total-budget))
+    )
         (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
         (asserts! (is-eq (get status grant) "PENDING") ERR-ALREADY-APPROVED)
+        (asserts! (<= (+ current-allocated grant-amount) current-budget) ERR-BUDGET-EXCEEDED)
+        
+        (var-set allocated-budget (+ current-allocated grant-amount))
         (map-set grants
             { grant-id: grant-id }
             (merge grant {
@@ -166,6 +178,61 @@
                 status: (if is-expired "EXPIRED" (get status grant))
             }))
         )
+    )
+)
+
+(define-public (set-total-budget (budget uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+        (asserts! (> budget u0) ERR-INVALID-BUDGET)
+        (asserts! (>= budget (var-get allocated-budget)) ERR-INVALID-BUDGET)
+        (var-set total-budget budget)
+        (ok true)
+    )
+)
+
+(define-public (adjust-allocated-budget (amount uint) (increase bool))
+    (let ((current-allocated (var-get allocated-budget)))
+        (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+        (if increase
+            (var-set allocated-budget (+ current-allocated amount))
+            (if (>= current-allocated amount)
+                (var-set allocated-budget (- current-allocated amount))
+                (var-set allocated-budget u0)
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-budget-status)
+    (let (
+        (total (var-get total-budget))
+        (allocated (var-get allocated-budget))
+    )
+        (ok {
+            total-budget: total,
+            allocated-budget: allocated,
+            available-budget: (if (>= total allocated) (- total allocated) u0),
+            utilization-rate: (if (> total u0) (/ (* allocated u100) total) u0)
+        })
+    )
+)
+
+(define-read-only (get-available-budget)
+    (let (
+        (total (var-get total-budget))
+        (allocated (var-get allocated-budget))
+    )
+        (ok (if (>= total allocated) (- total allocated) u0))
+    )
+)
+
+(define-read-only (can-approve-amount (amount uint))
+    (let (
+        (available (unwrap-panic (get-available-budget)))
+    )
+        (ok (>= available amount))
     )
 )
 ;;Thanks
