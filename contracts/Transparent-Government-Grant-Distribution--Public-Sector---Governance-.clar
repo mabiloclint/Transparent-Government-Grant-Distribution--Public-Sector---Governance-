@@ -34,7 +34,8 @@
     {
         description: (string-ascii 256),
         amount: uint,
-        completed: bool
+        completed: bool,
+        withdrawn: bool
     }
 )
 
@@ -102,7 +103,8 @@
             {
                 description: description,
                 amount: amount,
-                completed: false
+                completed: false,
+                withdrawn: false
             }
         )
         (map-set grants
@@ -236,3 +238,22 @@
     )
 )
 ;;Thanks
+(define-public (withdraw-milestone-funds (grant-id uint) (milestone-id uint))
+    (let (
+        (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
+        (milestone (unwrap! (map-get? milestones { grant-id: grant-id, milestone-id: milestone-id }) ERR-GRANT-NOT-FOUND))
+        (milestone-amount (get amount milestone))
+    )
+        (asserts! (is-eq tx-sender (get applicant grant)) ERR-NOT-AUTHORIZED)
+        (asserts! (get completed milestone) ERR-GRANT-NOT-FOUND)
+        (asserts! (not (get withdrawn milestone)) ERR-ALREADY-APPROVED)
+        (asserts! (>= (var-get total-funds) milestone-amount) ERR-INSUFFICIENT-FUNDS)
+        (try! (stx-transfer? milestone-amount (as-contract tx-sender) tx-sender))
+        (var-set total-funds (- (var-get total-funds) milestone-amount))
+        (map-set milestones
+            { grant-id: grant-id, milestone-id: milestone-id }
+            (merge milestone { withdrawn: true })
+        )
+        (ok true)
+    )
+)
