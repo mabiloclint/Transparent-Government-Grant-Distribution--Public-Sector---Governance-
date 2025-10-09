@@ -6,6 +6,7 @@
 (define-constant ERR-GRANT-EXPIRED (err u105))
 (define-constant ERR-BUDGET-EXCEEDED (err u106))
 (define-constant ERR-INVALID-BUDGET (err u107))
+(define-constant ERR-CANNOT-REVOKE (err u108))
 
 (define-constant DEFAULT-EXPIRY-BLOCKS u2016)
 
@@ -92,6 +93,24 @@
     )
 )
 
+(define-public (revoke-grant (grant-id uint))
+    (let (
+        (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
+        (grant-amount (get amount grant))
+        (current-allocated (var-get allocated-budget))
+    )
+        (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+        (asserts! (is-eq (get status grant) "APPROVED") ERR-CANNOT-REVOKE)
+        (asserts! (not (unwrap-panic (is-grant-expired grant-id))) ERR-GRANT-EXPIRED)
+        (var-set allocated-budget (- current-allocated grant-amount))
+        (map-set grants
+            { grant-id: grant-id }
+            (merge grant { status: "REVOKED" })
+        )
+        (ok true)
+    )
+)
+
 (define-public (add-milestone (grant-id uint) (description (string-ascii 256)) (amount uint))
     (let (
         (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
@@ -121,13 +140,17 @@
     (let (
         (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
         (milestone (unwrap! (map-get? milestones { grant-id: grant-id, milestone-id: milestone-id }) ERR-GRANT-NOT-FOUND))
+        (milestone-amount (get amount milestone))
     )
         (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
         (asserts! (not (get completed milestone)) ERR-ALREADY-APPROVED)
-        
+        (asserts! (not (get withdrawn milestone)) ERR-ALREADY-APPROVED)
+        (asserts! (>= (var-get total-funds) milestone-amount) ERR-INSUFFICIENT-FUNDS)
+        (try! (stx-transfer? milestone-amount (as-contract tx-sender) (get applicant grant)))
+        (var-set total-funds (- (var-get total-funds) milestone-amount))
         (map-set milestones
             { grant-id: grant-id, milestone-id: milestone-id }
-            (merge milestone { completed: true })
+            (merge milestone { completed: true, withdrawn: true })
         )
         
         (map-set grants
@@ -254,6 +277,17 @@
             { grant-id: grant-id, milestone-id: milestone-id }
             (merge milestone { withdrawn: true })
         )
+        (ok true)
+    )
+)
+
+(define-public (withdraw-grant-application (grant-id uint))
+    (let (
+        (grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND))
+    )
+        (asserts! (is-eq tx-sender (get applicant grant)) ERR-NOT-AUTHORIZED)
+        (asserts! (is-eq (get status grant) "PENDING") ERR-ALREADY-APPROVED)
+        (map-delete grants { grant-id: grant-id })
         (ok true)
     )
 )
