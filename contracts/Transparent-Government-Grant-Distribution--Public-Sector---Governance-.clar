@@ -7,6 +7,7 @@
 (define-constant ERR-BUDGET-EXCEEDED (err u106))
 (define-constant ERR-INVALID-BUDGET (err u107))
 (define-constant ERR-CANNOT-REVOKE (err u108))
+(define-constant ERR-GRANT-PAUSED (err u109))
 
 (define-constant DEFAULT-EXPIRY-BLOCKS u2016)
 
@@ -26,7 +27,8 @@
         approved-at: uint,
         milestone-count: uint,
         completed-milestones: uint,
-        expiry-block: uint
+        expiry-block: uint,
+        paused: bool
     }
 )
 
@@ -61,7 +63,8 @@
                 approved-at: u0,
                 milestone-count: u0,
                 completed-milestones: u0,
-                expiry-block: u0
+                expiry-block: u0,
+                paused: false
             }
         )
         (var-set total-grants grant-id)
@@ -86,7 +89,8 @@
             (merge grant {
                 status: "APPROVED",
                 approved-at: burn-block-height,
-                expiry-block: (+ burn-block-height DEFAULT-EXPIRY-BLOCKS)
+                expiry-block: (+ burn-block-height DEFAULT-EXPIRY-BLOCKS),
+                paused: false
             })
         )
         (ok true)
@@ -105,7 +109,7 @@
         (var-set allocated-budget (- current-allocated grant-amount))
         (map-set grants
             { grant-id: grant-id }
-            (merge grant { status: "REVOKED" })
+            (merge grant { status: "REVOKED", paused: false })
         )
         (ok true)
     )
@@ -145,6 +149,7 @@
         (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
         (asserts! (not (get completed milestone)) ERR-ALREADY-APPROVED)
         (asserts! (not (get withdrawn milestone)) ERR-ALREADY-APPROVED)
+        (asserts! (not (get paused grant)) ERR-GRANT-PAUSED)
         (asserts! (>= (var-get total-funds) milestone-amount) ERR-INSUFFICIENT-FUNDS)
         (try! (stx-transfer? milestone-amount (as-contract tx-sender) (get applicant grant)))
         (var-set total-funds (- (var-get total-funds) milestone-amount))
@@ -178,7 +183,8 @@
         (map-set grants
             { grant-id: grant-id }
             (merge grant {
-                expiry-block: (+ burn-block-height expiry-blocks)
+                expiry-block: (+ burn-block-height expiry-blocks),
+                paused: false
             })
         )
         (ok true)
@@ -270,6 +276,7 @@
         (asserts! (is-eq tx-sender (get applicant grant)) ERR-NOT-AUTHORIZED)
         (asserts! (get completed milestone) ERR-GRANT-NOT-FOUND)
         (asserts! (not (get withdrawn milestone)) ERR-ALREADY-APPROVED)
+        (asserts! (not (get paused grant)) ERR-GRANT-PAUSED)
         (asserts! (>= (var-get total-funds) milestone-amount) ERR-INSUFFICIENT-FUNDS)
         (try! (stx-transfer? milestone-amount (as-contract tx-sender) tx-sender))
         (var-set total-funds (- (var-get total-funds) milestone-amount))
@@ -279,6 +286,30 @@
         )
         (ok true)
     )
+)
+
+(define-public (pause-grant (grant-id uint))
+   (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+       (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+       (asserts! (is-eq (get status grant) "APPROVED") ERR-GRANT-NOT-FOUND)
+       (map-set grants
+           { grant-id: grant-id }
+           (merge grant { paused: true })
+       )
+       (ok true)
+   )
+)
+
+(define-public (unpause-grant (grant-id uint))
+   (let ((grant (unwrap! (map-get? grants { grant-id: grant-id }) ERR-GRANT-NOT-FOUND)))
+       (asserts! (is-eq tx-sender (var-get government-address)) ERR-NOT-AUTHORIZED)
+       (asserts! (is-eq (get status grant) "APPROVED") ERR-GRANT-NOT-FOUND)
+       (map-set grants
+           { grant-id: grant-id }
+           (merge grant { paused: false })
+       )
+       (ok true)
+   )
 )
 
 (define-public (withdraw-grant-application (grant-id uint))
